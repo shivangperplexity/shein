@@ -9,7 +9,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.error import BadRequest
+from bs4 import BeautifulSoup
 
 # Enable logging
 logging.basicConfig(
@@ -18,23 +18,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION ---
-
+# --- CONFIGURATION CHANGES ---
 # 1. Bot credentials
 BOT_TOKEN = "8313508428:AAFlmiRD2dd7aOPHdz6Pe0PykrJEkqzs4kw"
-# Target Group/Channel for real-time updates
-CHAT_ID = "-1003028949899" 
+# Updated CHAT_ID for the group -1003028949899
+CHAT_ID = "-1003028949899" # Target Group/Channel for real-time updates
 
 # Files to store data
-CONFIG = {
-    "PRODUCT_CODES_FILE": "product_codes.txt",
-    "PRODUCT_DETAILS_FILE": "product_details.json",
-    "OUT_OF_STOCK_FILE": "out_of_stock.txt",
-    "NOTIFIED_OUT_OF_STOCK_FILE": "notified_out_of_stock.txt",
-    "NOTIFIED_NEW_PRODUCTS_FILE": "notified_new_products.txt",
-    "NOTIFIED_PRICE_CHANGES_FILE": "notified_price_changes.json",
-    "POLLING_DELAY_SECONDS": 5, # Increased slightly to 5s for stability
-}
+PRODUCT_CODES_FILE = "product_codes.txt"
+PRODUCT_DETAILS_FILE = "product_details.json"
+OUT_OF_STOCK_FILE = "out_of_stock.txt"
+NOTIFIED_OUT_OF_STOCK_FILE = "notified_out_of_stock.txt"
+NOTIFIED_NEW_PRODUCTS_FILE = "notified_new_products.txt"
+NOTIFIED_PRICE_CHANGES_FILE = "notified_price_changes.json"
 
 # SHEIN API endpoints
 CATALOG_API_URL = "https://www.sheinindia.in/api/category/sverse-5939-37961"
@@ -44,7 +40,7 @@ DELIVERY_API_URL = "https://www.sheinindia.in/api/edd/checkDeliveryDetails"
 DEFAULT_PIN_CODE_N = "411043" # Default for /n command
 MONITOR_PIN_CODES = ["411043", "410206"] # Used for background alerts
 
-# Headers and Cookies (KEEP AS IS - These are crucial for API access)
+# Headers and Cookies (keeping them as provided)
 HEADERS = {
     'accept': 'application/json',
     'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
@@ -53,8 +49,6 @@ HEADERS = {
 }
 
 COOKIES = {
-    # ... (Your long list of cookies) ...
-    # Removed for brevity, but keep them in your actual script
     'V': '1',
     '_fbp': 'fb.1.1761380004446.284135199968730205',
     '_fpuuid': 'Wz5Z4g_B68bu9Ourjcxyj',
@@ -75,68 +69,98 @@ COOKIES = {
 }
 
 # Global variables to store data
-PRODUCTS_CACHE = {} # Used for /n and /checkdelivery commands
-PREVIOUS_CATALOG = {} # Used for price/new/oos comparison
+PRODUCTS_CACHE = {}
+PREVIOUS_CATALOG = {}
 
 # Thread pool for concurrent requests
-# Using a higher number can increase speed but may also lead to rate limiting
-executor = ThreadPoolExecutor(max_workers=20) # Increased workers for faster checks in /n
+executor = ThreadPoolExecutor(max_workers=10)
 
-# --- UTILITY FUNCTIONS (UPDATED FOR CLARITY/MAINTAINABILITY) ---
+# --- UTILITY FUNCTIONS (NO CHANGES NEEDED) ---
 
-def load_data(file_key, default_type):
-    """Generic function to load data from file, handles different types."""
-    file_path = CONFIG[file_key]
-    if not os.path.exists(file_path):
-        return default_type()
-    
+def load_product_codes():
+    """Load existing product codes from file"""
+    if not os.path.exists(PRODUCT_CODES_FILE):
+        return set()
+    with open(PRODUCT_CODES_FILE, 'r') as f:
+        return set(line.strip() for line in f)
+
+def save_product_codes(codes):
+    """Save product codes to file"""
+    with open(PRODUCT_CODES_FILE, 'w') as f:
+        for code in codes:
+            f.write(f"{code}\n")
+
+def load_product_details():
+    """Load product details from file"""
+    if not os.path.exists(PRODUCT_DETAILS_FILE):
+        return {}
     try:
-        if file_path.endswith('.json'):
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        else:
-            with open(file_path, 'r') as f:
-                return default_type(line.strip() for line in f)
-    except Exception as e:
-        logger.error(f"Error loading {file_path}: {e}")
-        return default_type()
+        with open(PRODUCT_DETAILS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
 
-def save_data(file_key, data):
-    """Generic function to save data to file, handles different types."""
-    file_path = CONFIG[file_key]
+def save_product_details(details):
+    """Save product details to file"""
+    with open(PRODUCT_DETAILS_FILE, 'w') as f:
+        json.dump(details, f, indent=2)
+
+def load_out_of_stock():
+    """Load out of stock products from file"""
+    if not os.path.exists(OUT_OF_STOCK_FILE):
+        return set()
+    with open(OUT_OF_STOCK_FILE, 'r') as f:
+        return set(line.strip() for line in f)
+
+def save_out_of_stock(codes):
+    """Save out of stock products to file"""
+    with open(OUT_OF_STOCK_FILE, 'w') as f:
+        for code in codes:
+            f.write(f"{code}\n")
+
+def load_notified_out_of_stock():
+    """Load already notified out of stock products"""
+    if not os.path.exists(NOTIFIED_OUT_OF_STOCK_FILE):
+        return set()
+    with open(NOTIFIED_OUT_OF_STOCK_FILE, 'r') as f:
+        return set(line.strip() for line in f)
+
+def save_notified_out_of_stock(codes):
+    """Save already notified out of stock products"""
+    with open(NOTIFIED_OUT_OF_STOCK_FILE, 'w') as f:
+        for code in codes:
+            f.write(f"{code}\n")
+
+def load_notified_new_products():
+    """Load already notified new products"""
+    if not os.path.exists(NOTIFIED_NEW_PRODUCTS_FILE):
+        return set()
+    with open(NOTIFIED_NEW_PRODUCTS_FILE, 'r') as f:
+        return set(line.strip() for line in f)
+
+def save_notified_new_products(codes):
+    """Save already notified new products"""
+    with open(NOTIFIED_NEW_PRODUCTS_FILE, 'w') as f:
+        for code in codes:
+            f.write(f"{code}\n")
+
+def load_notified_price_changes():
+    """Load already notified price changes"""
+    if not os.path.exists(NOTIFIED_PRICE_CHANGES_FILE):
+        return {}
     try:
-        with open(file_path, 'w') as f:
-            if file_path.endswith('.json'):
-                json.dump(data, f, indent=2)
-            elif isinstance(data, set):
-                for item in data:
-                    f.write(f"{item}\n")
-            else:
-                # Assuming simple text saving for other cases
-                for item in data:
-                    f.write(f"{item}\n")
-    except Exception as e:
-        logger.error(f"Error saving {file_path}: {e}")
+        with open(NOTIFIED_PRICE_CHANGES_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
 
-# Map keys to generic load/save functions
-load_product_codes = lambda: load_data("PRODUCT_CODES_FILE", set)
-save_product_codes = lambda data: save_data("PRODUCT_CODES_FILE", data)
-load_product_details = lambda: load_data("PRODUCT_DETAILS_FILE", dict)
-save_product_details = lambda data: save_data("PRODUCT_DETAILS_FILE", data)
-load_out_of_stock = lambda: load_data("OUT_OF_STOCK_FILE", set)
-save_out_of_stock = lambda data: save_data("OUT_OF_STOCK_FILE", data)
-load_notified_out_of_stock = lambda: load_data("NOTIFIED_OUT_OF_STOCK_FILE", set)
-save_notified_out_of_stock = lambda data: save_data("NOTIFIED_OUT_OF_STOCK_FILE", data)
-load_notified_new_products = lambda: load_data("NOTIFIED_NEW_PRODUCTS_FILE", set)
-save_notified_new_products = lambda data: save_data("NOTIFIED_NEW_PRODUCTS_FILE", data)
-load_notified_price_changes = lambda: load_data("NOTIFIED_PRICE_CHANGES_FILE", dict)
-save_notified_price_changes = lambda data: save_data("NOTIFIED_PRICE_CHANGES_FILE", data)
-
-# --- API FUNCTIONS (NO MAJOR LOGIC CHANGE, KEPT FOR COMPLETENESS) ---
+def save_notified_price_changes(data):
+    """Save already notified price changes"""
+    with open(NOTIFIED_PRICE_CHANGES_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
 def fetch_catalog():
     """Fetch product catalog from SHEIN API with retry mechanism"""
-    # ... (function body as provided by user - no change) ...
     params = {
         'fields': 'SITE',
         'currentPage': '0',
@@ -189,7 +213,6 @@ def fetch_catalog():
 
 def check_delivery_availability(product_code, pin_code):
     """Check delivery availability for a product to a specific pin code"""
-    # ... (function body as provided by user - no change) ...
     params = {
         'productCode': product_code,
         'postalCode': pin_code,
@@ -207,7 +230,6 @@ def check_delivery_availability(product_code, pin_code):
 
 async def check_delivery_for_pins(product_code, pin_codes):
     """Check delivery availability for a list of pin codes"""
-    # ... (function body as provided by user - no change) ...
     delivery_info = {}
     
     # Create tasks for concurrent execution
@@ -272,10 +294,9 @@ async def check_delivery_for_all_pins(product_code):
     """Check delivery availability for all MONITOR_PIN_CODES (used for alerts)"""
     return await check_delivery_for_pins(product_code, MONITOR_PIN_CODES)
 
-# --- HELPER FUNCTION (NO MAJOR LOGIC CHANGE, KEPT FOR COMPLETENESS) ---
+# --- REVISED HELPER FUNCTION ---
 def format_product_info(product, index=None, delivery_info=None):
     """Format product information for display"""
-    # ... (function body as provided by user - no change) ...
     name = product.get('name', 'Unknown Product')
     code = product.get('code', 'Unknown Code')
     price = product.get('price', {}).get('formattedValue', 'Price not available')
@@ -319,7 +340,7 @@ def format_product_info(product, index=None, delivery_info=None):
     # Add index if provided
     if index is not None:
         # The index here is i+1 from the loops, representing the product number
-        message += f"📦 <b>Product #{index + 1}</b>\n\n"  
+        message += f"📦 <b>Product #{index + 1}</b>\n\n" 
     
     message += f"<b>{name}</b>\n"
     message += f"Code: {code}\n"
@@ -355,86 +376,79 @@ def format_product_info(product, index=None, delivery_info=None):
     
     return message, image_url
 
-# --- MONITORING FUNCTION (KEY LOGIC CHANGE) ---
+# --- MONITORING FUNCTION (CHAT_ID UPDATED FOR ALERTS) ---
 
 async def monitor_catalog_changes(application):
     """Monitor catalog changes in real-time"""
     global PREVIOUS_CATALOG, PRODUCTS_CACHE
     
-    # Load initial data
+    # Load notification tracking files
     notified_out_of_stock = load_notified_out_of_stock()
     notified_new_products = load_notified_new_products()
     notified_price_changes = load_notified_price_changes()
-    existing_codes = load_product_codes()
-    out_of_stock = load_out_of_stock()
-    
-    # Ensure PREVIOUS_CATALOG is loaded from file on start
-    if not PREVIOUS_CATALOG:
-        PREVIOUS_CATALOG = load_product_details()
-    
-    # Use a separate set to track products that are known to be OOS but haven't been notified
-    # This set will be updated only when an item is permanently removed from the catalog/file
     
     while True:
         try:
             # Fetch current catalog
             catalog_data = fetch_catalog()
             if not catalog_data:
-                await asyncio.sleep(CONFIG["POLLING_DELAY_SECONDS"] * 6) # Wait 30s before retrying on error
+                await asyncio.sleep(30)  # Wait 30 seconds before retrying on error
                 continue
             
             current_products = catalog_data.get('products', [])
             current_codes = set(product.get('code') for product in current_products if product.get('code'))
             
-            # --- 1. Detect New Products ---
+            # Load previous catalog if available
+            if not PREVIOUS_CATALOG:
+                PREVIOUS_CATALOG = load_product_details()
+            
+            # Load existing product codes
+            existing_codes = load_product_codes()
+            out_of_stock = load_out_of_stock()
+            
+            # Check for new products
             new_products = []
             for product in current_products:
                 code = product.get('code')
                 if code and code not in existing_codes:
                     new_products.append(product)
-                    existing_codes.add(code) # Add to the master list of all ever-seen products
+                    existing_codes.add(code)
             
-            # --- 2. Detect Removed Products (Out of Stock / Permanently Gone) ---
-            # A product is considered "removed" if it was in the master list but is not in the current catalog.
+            # Check for removed products (out of stock) - only if not already notified
             removed_products = []
-            # Iterate over a copy of existing_codes to allow modification of out_of_stock set
-            for code in list(existing_codes): 
-                if code not in current_codes:
-                    # Product is gone from the API results
-                    if code in PREVIOUS_CATALOG and code not in notified_out_of_stock:
+            for code in existing_codes:
+                if code not in current_codes and code not in notified_out_of_stock:
+                    # Retrieve details before potentially deleting (if product removed from PREVIOUS_CATALOG)
+                    if code in PREVIOUS_CATALOG:
                         removed_products.append(PREVIOUS_CATALOG[code])
-                        notified_out_of_stock.add(code)
-                        out_of_stock.add(code)
-                    
-                    # Do NOT remove from existing_codes yet, let it be removed only after a few cycles 
-                    # or only when we're sure it's gone permanently. For simplicity here, we'll keep 
-                    # it in existing_codes for now to avoid re-notification if it reappears.
-                    # The price/new check only runs on existing codes.
+                    else:
+                        removed_products.append({'code': code, 'name': 'Unknown Product'})
+                    out_of_stock.add(code)
+                    notified_out_of_stock.add(code)
             
-            # --- 3. Detect Price Changes and Update Catalog Details ---
+            # Check for price changes - only if not already notified
             price_changes = []
             for product in current_products:
                 code = product.get('code')
+                if code and code in PREVIOUS_CATALOG:
+                    prev_price = PREVIOUS_CATALOG.get(code, {}).get('price', {}).get('formattedValue', '')
+                    curr_price = product.get('price', {}).get('formattedValue', '')
+                    
+                    # Create a unique key for price change
+                    price_change_key = f"{code}_{prev_price}_{curr_price}"
+                    
+                    if (prev_price and curr_price and prev_price != curr_price and 
+                        price_change_key not in notified_price_changes):
+                        price_changes.append((product, old_price, curr_price))
+                        notified_price_changes[price_change_key] = datetime.now().isoformat()
+            
+            # Update previous catalog
+            for product in current_products:
+                code = product.get('code')
                 if code:
-                    # Check for price change
-                    if code in PREVIOUS_CATALOG:
-                        prev_price = PREVIOUS_CATALOG[code].get('price', {}).get('formattedValue', '')
-                        curr_price = product.get('price', {}).get('formattedValue', '')
-                        
-                        price_change_key = f"{code}_{prev_price}_{curr_price}"
-                        
-                        if (prev_price and curr_price and prev_price != curr_price and 
-                            price_change_key not in notified_price_changes):
-                            
-                            # Use the old price for the alert, and the current product details
-                            price_changes.append((product, prev_price, curr_price))
-                            # Mark key as notified - prevent repeat alert for this exact price transition
-                            notified_price_changes[price_change_key] = datetime.now().isoformat()
-                            
-                    # Update PREVIOUS_CATALOG with the latest details
                     PREVIOUS_CATALOG[code] = product
             
-            # --- 4. Save updated data ---
+            # Save updated data
             save_product_codes(existing_codes)
             save_product_details(PREVIOUS_CATALOG)
             save_out_of_stock(out_of_stock)
@@ -444,38 +458,38 @@ async def monitor_catalog_changes(application):
             # Update products cache (for immediate use if user asks)
             PRODUCTS_CACHE = {str(i+1): product for i, product in enumerate(current_products)}
             
-            # --- 5. Send Notifications (New Products) ---
+            # Send notifications for new products (using the updated CHAT_ID)
             for product in new_products:
                 code = product.get('code')
                 if code and code not in notified_new_products:
-                    delivery_info = await check_delivery_for_all_pins(code)  
+                    # Check delivery for all monitor pins
+                    delivery_info = await check_delivery_for_all_pins(code) 
                     message, image_url = format_product_info(product, delivery_info=delivery_info)
                     
                     try:
-                        alert_message = f"🆕 <b>NEW PRODUCT ALERT!</b>\n\n{message}"
                         if image_url:
                             await application.bot.send_photo(
-                                chat_id=CHAT_ID, 
+                                chat_id=CHAT_ID, # UPDATED
                                 photo=image_url,
-                                caption=alert_message,
+                                caption=f"🆕 <b>NEW PRODUCT ALERT!</b>\n\n{message}",
                                 parse_mode='HTML'
                             )
                         else:
                             await application.bot.send_message(
-                                chat_id=CHAT_ID, 
-                                text=alert_message,
+                                chat_id=CHAT_ID, # UPDATED
+                                text=f"🆕 <b>NEW PRODUCT ALERT!</b>\n\n{message}",
                                 parse_mode='HTML'
                             )
                         
+                        # Mark as notified
                         notified_new_products.add(code)
                         save_notified_new_products(notified_new_products)
-                        await asyncio.sleep(0.5) 
-                    except BadRequest as e:
-                        logger.error(f"Telegram BadRequest for new product {code}: {e}")
+                        
+                        await asyncio.sleep(0.5) # Small delay
                     except Exception as e:
                         logger.error(f"Error sending new product notification: {e}")
             
-            # --- 6. Send Notifications (Out of Stock/Removed Products) ---
+            # Send notifications for removed products (using the updated CHAT_ID)
             for product in removed_products:
                 code = product.get('code')
                 product_name = product.get('name', 'Unknown Product')
@@ -486,53 +500,50 @@ async def monitor_catalog_changes(application):
                 
                 try:
                     await application.bot.send_message(
-                        chat_id=CHAT_ID, 
+                        chat_id=CHAT_ID, # UPDATED
                         text=message,
                         parse_mode='HTML'
                     )
-                    await asyncio.sleep(0.5)
-                except BadRequest as e:
-                    logger.error(f"Telegram BadRequest for removed product {code}: {e}")
+                    await asyncio.sleep(0.5) # Small delay
                 except Exception as e:
                     logger.error(f"Error sending out of stock notification: {e}")
             
-            # --- 7. Send Notifications (Price Changes) ---
+            # Send notifications for price changes (using the updated CHAT_ID)
             for product, old_price, new_price in price_changes:
                 code = product.get('code')
                 product_name = product.get('name', 'Unknown Product')
                 message = f"💰 <b>PRICE CHANGE ALERT!</b>\n\n"
                 message += f"<b>{product_name}</b>\n"
                 message += f"Code: {code}\n\n"
-                message += f"Old Price: <s>{old_price}</s>\n"
-                message += f"New Price: <b>{new_price}</b>\n\n"
+                message += f"Old Price: {old_price}\n"
+                message += f"New Price: {new_price}\n\n"
                 message += f"<a href='https://www.sheinindia.in/p/{code}'>🔗 View on SHEIN</a>"
                 
                 try:
                     await application.bot.send_message(
-                        chat_id=CHAT_ID, 
+                        chat_id=CHAT_ID, # UPDATED
                         text=message,
                         parse_mode='HTML'
                     )
-                    await asyncio.sleep(0.5) 
-                except BadRequest as e:
-                    logger.error(f"Telegram BadRequest for price change {code}: {e}")
+                    await asyncio.sleep(0.5) # Small delay
                 except Exception as e:
                     logger.error(f"Error sending price change notification: {e}")
             
-            # Wait 5 seconds before next check
-            await asyncio.sleep(CONFIG["POLLING_DELAY_SECONDS"])
+            # Wait 5 seconds before next check (reduced frequency to avoid rate limiting)
+            await asyncio.sleep(5)
             
         except Exception as e:
-            logger.error(f"Fatal error in catalog monitoring: {e}")
-            await asyncio.sleep(CONFIG["POLLING_DELAY_SECONDS"] * 6) # Wait 30s before retrying
+            logger.error(f"Error in catalog monitoring: {e}")
+            await asyncio.sleep(30)  # Wait 30 seconds before retrying
 
-# --- COMMAND HANDLERS (NO MAJOR LOGIC CHANGE, KEPT FOR COMPLETENESS) ---
+# --- REVISED /n COMMAND HANDLER ---
 
 async def deliverable_products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Show only deliverable products to a specified pincode.  
+    Show only deliverable products to a specified pincode. 
     Defaults to 411043 if no pincode is provided.
     """
+    
     # 2. Command modification: /n or /n <pincode>
     if context.args and re.match(r'^\d{6}$', context.args[0]):
         # /n <pincode> was typed
@@ -578,7 +589,6 @@ async def deliverable_products_command(update: Update, context: ContextTypes.DEF
             return None
         
         try:
-            # Re-used the delivery check with the target pin code
             delivery_info = await check_delivery_for_pins(code, pin_codes_to_check)
             
             # Check if product is deliverable to ANY of the pin codes in the list (in this case, just one pin)
@@ -592,12 +602,12 @@ async def deliverable_products_command(update: Update, context: ContextTypes.DEF
         return None
 
     # Process products in batches to avoid overwhelming the API
-    # NOTE: The batch logic is now inside a loop that waits for all tasks in the batch
     batch_size = 5
     for batch_start in range(0, len(products), batch_size):
         batch_end = min(batch_start + batch_size, len(products))
         batch = products[batch_start:batch_end]
         
+        # Create tasks for this batch
         tasks = []
         for i, product in enumerate(batch):
             task = asyncio.create_task(
@@ -619,7 +629,6 @@ async def deliverable_products_command(update: Update, context: ContextTypes.DEF
                     rate = checked_count / elapsed if elapsed > 0 else 0
                     eta = (len(products) - checked_count) / rate if rate > 0 else 0
                     
-                    # Edit the progress message
                     await progress_message.edit_text(
                         f"🔍 Checking delivery for {len(products)} products to **{pin_display}**...\n\n"
                         f"✅ Checked: {checked_count}/{len(products)}\n"
@@ -680,7 +689,7 @@ async def deliverable_products_command(update: Update, context: ContextTypes.DEF
     
     await update.message.reply_text(f"✅ All {len(deliverable_products)} deliverable products for **{pin_display}** sent! Use /checkdelivery <number> to check delivery again.", parse_mode='Markdown')
 
-# --- CHECK DELIVERY COMMAND HANDLER (NO MAJOR LOGIC CHANGE, KEPT FOR COMPLETENESS) ---
+# --- REVISED CHECK DELIVERY COMMAND HANDLER ---
 
 async def check_delivery_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Check delivery availability for a product by number."""
@@ -704,7 +713,16 @@ async def check_delivery_command(update: Update, context: ContextTypes.DEFAULT_T
     code = product.get('code')
     progress_message = await update.message.reply_text(f"🔍 Checking delivery for product **#{product_number}** (*{code}*)...", parse_mode='Markdown')
     
-    # Use MONITOR_PIN_CODES for /checkdelivery
+    # Determine which pin codes to check:
+    # 1. If the last /n command used a specific pin, we should keep that pin for reference. 
+    # 2. Otherwise, check against the default MONITOR_PIN_CODES.
+    
+    # A simple way to handle this without full state management is to just check the monitor pins, 
+    # but for a true representation of the /n list, we need the PIN_CODES used for the cached products.
+    # Since the original script just checked MONITOR_PIN_CODES here anyway, we'll maintain that for simplicity:
+    
+    # The /n command now uses the `target_pin_codes` list, but that variable is local to `deliverable_products_command`.
+    # A cleaner approach would be to check a set of relevant pins for /checkdelivery, let's use the MONITOR_PIN_CODES.
     delivery_info = await check_delivery_for_all_pins(code)
 
     message = f"📦 <b>Product #{product_number} - {product.get('name', 'Unknown')}</b>\n"
@@ -722,13 +740,9 @@ async def check_delivery_command(update: Update, context: ContextTypes.DEFAULT_T
             if info['reason']:
                 message += f"Reason: {info['reason']}\n"
     
-    try:
-        await progress_message.edit_text(message, parse_mode='HTML')
-    except Exception as e:
-        logger.error(f"Error editing message for /checkdelivery: {e}")
-        await context.bot.send_message(update.effective_chat.id, "Error updating delivery status message.")
+    await progress_message.edit_text(message, parse_mode='HTML')
 
-# --- OTHER COMMANDS (NO MAJOR LOGIC CHANGE, KEPT FOR COMPLETENESS) ---
+# --- OTHER COMMANDS (NO CHANGES NEEDED) ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
@@ -737,14 +751,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Commands:\n"
         "/products - View all products with delivery info (for pins 411043, 410206)\n"
         "/n - View only deliverable products for **411043** (FAST)\n"
-        "/n <pincode> - View deliverable products for that specific pincode\n" 
+        "/n <pincode> - View deliverable products for that specific pincode\n" # ADDED INFO
         "/checkdelivery <number> - Check delivery for product by number\n"
         "/status - Check monitoring status\n"
         "/reset - Reset notification tracking\n"
         "/help - Show this help message\n\n"
         "💡 Products are numbered for easy reference!\n"
         "🔔 Real-time monitoring is active to the group! You'll be notified of new products, out of stock items, and price changes!\n"
-        f"⚡ Optimized for speed with {executor._max_workers} concurrent workers!"
+        "⚡ Optimized for speed with concurrent processing!"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -753,14 +767,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🛍️ SHEIN Catalog Bot Commands:\n\n"
         "/products - View all products with delivery info (for pins 411043, 410206)\n"
         "/n - View only deliverable products for **411043** (FAST)\n"
-        "/n <pincode> - View deliverable products for that specific pincode\n" 
+        "/n <pincode> - View deliverable products for that specific pincode\n" # ADDED INFO
         "/checkdelivery <number> - Check delivery for product by number\n"
         "/status - Check monitoring status\n"
         "/reset - Reset notification tracking\n"
         "/help - Show this help message\n\n"
         "💡 Use /products or /n first to see numbered products, then use /checkdelivery <number>\n"
         "🔔 Real-time monitoring is active to the group! You'll be notified of new products, out of stock items, and price changes!\n"
-        f"⚡ Optimized for speed with {executor._max_workers} concurrent workers!"
+        "⚡ Optimized for speed with concurrent processing!"
     )
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -773,27 +787,27 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     await update.message.reply_text(
         f"📊 <b>Monitoring Status</b>\n\n"
-        f"✅ Active Products (Total Seen): {len(existing_codes)}\n"
-        f"❌ Permanently Out of Stock: {len(out_of_stock)}\n"
+        f"✅ Active Products: {len(existing_codes)}\n"
+        f"❌ Out of Stock: {len(out_of_stock)}\n"
         f"📢 Notified Out of Stock: {len(notified_out_of_stock)}\n"
         f"📢 Notified New Products: {len(notified_new_products)}\n"
         f"📢 Notified Price Changes: {len(notified_price_changes)}\n"
-        f"🔄 Real-time Monitoring: Active (Polling every {CONFIG['POLLING_DELAY_SECONDS']}s)\n"
-        f"📍 Monitoring Pin Codes: {', '.join(MONITOR_PIN_CODES)}\n" 
-        f"👤 Notification Chat ID: {CHAT_ID} (Group/Channel)\n" 
-        f"⚡ Concurrent Processing: Enabled ({executor._max_workers} workers)",
-        parse_mode='HTML'
+        f"🔄 Real-time Monitoring: Active\n"
+        f"📍 Monitoring Pin Codes: {', '.join(MONITOR_PIN_CODES)}\n" # Changed to MONITOR_PIN_CODES
+        f"👤 Notification Chat ID: {CHAT_ID} (Group/Channel)\n" # UPDATED
+        f"⚡ Concurrent Processing: Enabled (10 workers)"
     )
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset notification tracking files."""
     try:
         # Clear notification tracking files
-        for file_key in ["NOTIFIED_OUT_OF_STOCK_FILE", "NOTIFIED_NEW_PRODUCTS_FILE", "NOTIFIED_PRICE_CHANGES_FILE"]:
-            file_path = CONFIG[file_key]
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Removed file: {file_path}")
+        if os.path.exists(NOTIFIED_OUT_OF_STOCK_FILE):
+            os.remove(NOTIFIED_OUT_OF_STOCK_FILE)
+        if os.path.exists(NOTIFIED_NEW_PRODUCTS_FILE):
+            os.remove(NOTIFIED_NEW_PRODUCTS_FILE)
+        if os.path.exists(NOTIFIED_PRICE_CHANGES_FILE):
+            os.remove(NOTIFIED_PRICE_CHANGES_FILE)
         
         await update.message.reply_text(
             "✅ <b>Notification tracking reset!</b>\n\n"
@@ -802,6 +816,26 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         await update.message.reply_text(f"❌ Error resetting notification tracking: {str(e)}")
 
+# --- COMMANDS THAT WERE NOT MODIFIED ---
+async def check_single_product_delivery(product, index, total):
+    """Check delivery for a single product (used by /products)"""
+    code = product.get('code')
+    if not code:
+        return None
+    
+    try:
+        # Uses the monitor pins, same as before
+        delivery_info = await check_delivery_for_all_pins(code) 
+        
+        # Check if product is deliverable to any of the monitor pin codes
+        is_deliverable = any(info['serviceable'] for info in delivery_info.values())
+        
+        if is_deliverable:
+            return (product, delivery_info)
+    except Exception as e:
+        logger.error(f"Error checking delivery for product {code}: {e}")
+    
+    return None
 
 async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send all products one by one with images and delivery info (for MONITOR_PIN_CODES)."""
@@ -855,7 +889,6 @@ async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     await progress_message.edit_text(f"✅ All {len(products)} products sent! Use /checkdelivery <number> to check delivery again.")
 
-# --- MAIN SETUP ---
 
 async def post_init(application: Application) -> None:
     """Post-initialization function to start monitoring."""
@@ -871,15 +904,14 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("products", products_command))
-    application.add_handler(CommandHandler("n", deliverable_products_command)) 
+    application.add_handler(CommandHandler("n", deliverable_products_command)) # REVISED HANDLER
     application.add_handler(CommandHandler("checkdelivery", check_delivery_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("reset", reset_command))
     
-    # Initialize product codes file - ensure initial state is set
+    # Initialize product codes file
     existing_codes = load_product_codes()
     if not existing_codes:
-        logger.info("Initializing product codes from API...")
         catalog_data = fetch_catalog()
         if catalog_data:
             products = catalog_data.get('products', [])
